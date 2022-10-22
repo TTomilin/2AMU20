@@ -23,10 +23,11 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
+    dist_type = args.distribution
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    img_path = 'img_vae'
-    model_path = 'models'
+    img_path = f'img_vae/{dist_type}'
+    model_path = f'models/{dist_type}'
     datasets.mkdir_p(img_path)
     datasets.mkdir_p(model_path)
 
@@ -69,7 +70,6 @@ if __name__ == '__main__':
     n_classes = len(set(train_labels))
 
     # Create and print the encoder and decoder networks
-    dist_type = args.distribution
     if dist_type == 'categorical':
         encoder = CategoricalEncoder(n_classes, n_distributions).to(device)
         decoder = CategoricalDecoder(train_D, n_classes, n_distributions).to(device)
