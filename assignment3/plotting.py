@@ -5,6 +5,7 @@ import torch
 from matplotlib import pyplot as plt
 from torch import Tensor
 from torch.nn import Module
+from torch.nn.functional import gumbel_softmax
 
 from assignment3 import datasets
 
@@ -17,15 +18,19 @@ def plot_ELBO(ELBO_history: list, save_path: str = None):
     plt.savefig(path.join(save_path, 'elbo.png'))
 
 
-def plot_latent_space(encoder: Module, test_x: Tensor, test_labels: Tensor):
+def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_labels: Tensor):
     """
     Display a 2D plot of the digit classes in the latent space
+    :param distribution: type of the latent distribution
     :param encoder: encoder network extending torch.nn.Module
     :param test_x: test image data
     :param test_labels: test image labels [0-9]
     :return:
     """
-    z_mean, _ = encoder(test_x)
+    if distribution == 'categorical':
+        z_mean = encoder(test_x)
+    else:
+        z_mean, _ = encoder(test_x)
     z_mean = z_mean.cpu().detach().numpy()
     plt.figure(figsize=(12, 10))
     plt.scatter(z_mean[:, 0], z_mean[:, 1], c=test_labels)
@@ -53,9 +58,11 @@ def plot_latent_space_PCA(encoder: Module, test_x: Tensor, test_labels: Tensor):
     plt.show()
 
 
-def plot_interpolation(encoder: Module, decoder: Module, test_x: Tensor, test_labels: Tensor, digit_size=28, k=15):
+def plot_interpolation(distribution: str, encoder: Module, decoder: Module, test_x: Tensor, test_labels: Tensor,
+                       digit_size=28, k=15):
     """
     Plot interpolation between two pair-wise sampled digits in the latent space.
+    :param distribution: type of the latent distribution
     :param encoder: encoder network extending torch.nn.Module
     :param decoder: decoder network extending torch.nn.Module
     :param test_x: test image data
@@ -78,14 +85,22 @@ def plot_interpolation(encoder: Module, decoder: Module, test_x: Tensor, test_la
         x2 = test_x[indices[1]].reshape(1, 1, digit_size, digit_size)
 
         for j, lambda_ in enumerate(lin_space):
-            z1, _ = encoder(x1)
-            z2, _ = encoder(x2)
+
+            if distribution == 'categorical':
+                z1 = encoder(x1)
+                z2 = encoder(x2)
+            else:
+                z1, _ = encoder(x1)
+                z2, _ = encoder(x2)
 
             # Interpolate between the two latent vectors
-            z_int = lambda_ * z1 + (1 - lambda_) * z2
+            z = lambda_ * z1 + (1 - lambda_) * z2
+
+            if distribution == 'categorical':
+                z = gumbel_softmax(z)
 
             # Decode the interpolated latent vector
-            x = decoder(z_int).reshape(digit_size, digit_size).cpu().detach().numpy()
+            x = decoder(z).reshape(digit_size, digit_size).cpu().detach().numpy()
 
             # Plot the interpolated digit
             figure[row * digit_size: (row + 1) * digit_size, j * digit_size: (j + 1) * digit_size] = x
@@ -103,19 +118,40 @@ def plot_interpolation(encoder: Module, decoder: Module, test_x: Tensor, test_la
     plt.show()
 
 
-def plot_reconstruction(encoder, decoder, device, samples, n_samples: int, file_path: str, img_size: int):
-    plot_rows = 3
-    # Sample from the VAE
-    x, z = decoder.sample(n_samples, device)
-    # Encode some samples
-    input_x = samples.reshape(n_samples, img_size, img_size).unsqueeze(1)
-    mu_z, var_z = encoder(input_x)
-    z_encoded = mu_z + torch.sqrt(var_z) * torch.randn(n_samples, encoder.n_latent, device=device)
-    # Decode the samples
-    x_decoded = decoder(z_encoded)
+def plot_reconstruction(distribution: str, encoder: Module, decoder: Module, device: str, input_x: Tensor,
+                        n_samples: int, file_path: str, img_size: int):
+    """
+    Plot the reconstruction of the input samples
+    :param distribution: type of the latent distribution
+    :param encoder: encoder network extending torch.nn.Module
+    :param decoder: decoder network extending torch.nn.Module
+    :param device: cpu/cuda
+    :param input_x: input images
+    :param n_samples: number of new images to generate
+    :param file_path: path to save the plot
+    :param img_size: number of pixels of the width/height of the square MNIST digit image
+    """
+    # Reshape the input
+    x_reshaped = input_x.reshape(n_samples, img_size, img_size).unsqueeze(1)
+
+    # Encode the input
+    if distribution == 'categorical':
+        z = encoder(x_reshaped)
+        z = gumbel_softmax(z)
+    else:
+        mu_z, var_z = encoder(x_reshaped)
+        z = mu_z + torch.sqrt(var_z) * torch.randn(n_samples, encoder.n_latent, device=device)
+
+    # Decode the latent vector
+    x_decoded = decoder(z)
+
+    # Generate new images by sampling from the latent space
+    samples, _ = decoder.sample(n_samples, device)
+
     # Save images
-    plot_img = np.stack((samples.detach().cpu().numpy(),
+    n_rows = 3
+    plot_img = np.stack((input_x.detach().cpu().numpy(),
                          x_decoded.detach().cpu().numpy(),
-                         x.detach().cpu().numpy()))
-    plot_img = np.reshape(plot_img, (n_samples * plot_rows, img_size, img_size))
-    datasets.save_image_stack(plot_img, plot_rows, n_samples, file_path, margin=3)
+                         samples.detach().cpu().numpy()))
+    plot_img = np.reshape(plot_img, (n_samples * n_rows, img_size, img_size))
+    datasets.save_image_stack(plot_img, n_rows, n_samples, file_path, margin=3)

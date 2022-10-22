@@ -194,5 +194,5 @@ for epoch in tqdm(range(num_epochs)):
         plt.plot(ELBO_history)
         plt.savefig(os.path.join('img_vae_mlp', 'elbo.png'))
         test_input = test_x
-        plot_latent_space(encoder, test_input, test_labels)
-        plot_interpolation(encoder, decoder, test_input, test_labels)
+        plot_latent_space(args.distribution, encoder, test_input, test_labels)
+        plot_interpolation(args.distribution, encoder, decoder, test_input, test_labels)
