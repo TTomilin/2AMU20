@@ -17,8 +17,6 @@ class ConvEncoder(Module):
             conv_head.append(ELU(inplace=True))
             in_channels = n_filters
             n_filters *= 2
-        # TODO Do we need tanh?
-        # conv_head.append(Tanh())
         self.conv_head = torch.nn.ModuleList(conv_head)
 
         # Mean and variance layers
