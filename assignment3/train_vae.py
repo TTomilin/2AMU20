@@ -7,8 +7,7 @@ from tqdm import tqdm
 
 import datasets
 from assignment3.model import ConvEncoder, ConvDecoder
-from assignment3.plotting import plot_interpolation, plot_latent_space, plot_ELBO
-from assignment3.util import visualize_reconstruction
+from assignment3.plotting import plot_interpolation, plot_latent_space, plot_ELBO, plot_reconstruction
 
 if __name__ == '__main__':
 
@@ -23,6 +22,7 @@ if __name__ == '__main__':
     batch_size = 50
     num_epochs = 100
     learning_rate = 1e-4
+    stop_criterion = -270
     # Use a fixed variance for the decoder for more robust training
     var_x = 0.05
 
@@ -76,10 +76,16 @@ if __name__ == '__main__':
             batch_mu_z, batch_var_z = encoder(input_x)
             # sample z, using the "reparametrization trick"
             batch_z = batch_mu_z + torch.sqrt(batch_var_z) * torch.randn(batch_var_z.shape, device=device)
+
             # mu_x: batch_size, D
             mu_x = decoder(batch_z)
+
+            recon = mu_x + sqrt(decoder.var) * torch.randn(batch_x.shape[1], device=device)
+
             # squared distances between mu_x and batch_x
-            d2 = (mu_x - batch_x)**2
+            # d2 = (mu_x - batch_x)**2
+            d2 = (recon - batch_x)**2
+
             # Gaussian likelihood: 1/sqrt(2*pi*var) exp(-0.5 * (mu-x)**2 / var)
             # Thus, log-likelihood = -0.5 * ( log(2*pi*var) + (mu-x)**2 / var )
             log_p = -0.5 * torch.sum(np.log(decoder.var * 2 * np.pi) + d2 / decoder.var)
@@ -95,19 +101,27 @@ if __name__ == '__main__':
 
         if epoch % plot_interval == 0:
             with torch.no_grad():
-                samples = train_x[0:n_samples, :]
-                file_name = os.path.join(img_path, 'samples_{}.png'.format(epoch))
-                visualize_reconstruction(encoder, decoder, device, samples, n_samples, file_name, img_size)
-
                 # Store the model weights
                 torch.save(encoder.state_dict(), os.path.join(model_path, f'encoder_{epoch}.pt'))
                 torch.save(decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
 
-                test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
+                # Plot and save the ELBO curve and data reconstruction
+                samples = train_x[0:n_samples, :]
+                file_name = os.path.join(img_path, f'samples_{epoch}.png')
+                plot_reconstruction(encoder, decoder, device, samples, n_samples, file_name, img_size)
                 plot_ELBO(ELBO_history, img_path)
-                plot_latent_space(encoder, test_input, test_labels)
-                plot_interpolation(encoder, decoder, test_input, test_labels)
 
-        if mean_neg_ELBO < -300:
+        if mean_neg_ELBO < stop_criterion:
             print('Training criterion reached. Stopping training.')
+            # Store the model weights
+            torch.save(encoder.state_dict(), os.path.join(model_path, f'encoder.pt'))
+            torch.save(decoder.state_dict(), os.path.join(model_path, f'decoder.pt'))
             break
+
+    test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
+    plot_latent_space(encoder, test_input, test_labels)
+    plot_interpolation(encoder, decoder, test_input, test_labels)
+
+    samples = test_x[0:n_samples, :]
+    file_name = os.path.join(img_path, 'samples_test.png')
+    plot_reconstruction(encoder, decoder, device, samples, n_samples, file_name, img_size)
