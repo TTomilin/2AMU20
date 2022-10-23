@@ -1,8 +1,10 @@
 from os import path
 
+import matplotlib as mpl
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+from sklearn.decomposition import PCA
 from torch import Tensor
 from torch.nn import Module
 from torch.nn.functional import gumbel_softmax
@@ -10,51 +12,50 @@ from torch.nn.functional import gumbel_softmax
 from assignment3 import datasets
 
 
-def plot_ELBO(ELBO_history: list, save_path: str = None):
+def plot_loss(loss_history: list, save_path: str = None):
+    """
+    Plot the loss history
+    :param loss_history: list of loss values
+    :param save_path: path to save the plot to
+    """
     plt.figure(figsize=(12, 10))
     plt.clf()
-    plt.plot(ELBO_history)
+    plt.plot(loss_history)
     plt.show()
     plt.savefig(path.join(save_path, 'elbo.png'))
 
 
-def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_labels: Tensor):
+def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_labels: Tensor, use_pca=False):
     """
     Display a 2D plot of the digit classes in the latent space
     :param distribution: type of the latent distribution
     :param encoder: encoder network extending torch.nn.Module
     :param test_x: test image data
     :param test_labels: test image labels [0-9]
+    :param use_pca: whether to use PCA to reduce the dimensionality of the latent space
     :return:
     """
-    if distribution == 'categorical':
+    if distribution == 'categorical' or distribution == 'bernoulli':
         z_mean = encoder(test_x)
     else:
         z_mean, _ = encoder(test_x)
-    z_mean = z_mean.cpu().detach().numpy()
+    values = z_mean.cpu().detach().numpy()
     plt.figure(figsize=(12, 10))
-    plt.scatter(z_mean[:, 0], z_mean[:, 1], c=test_labels)
-    plt.colorbar()
-    plt.xlabel("z[0]")
-    plt.ylabel("z[1]")
-    plt.show()
 
+    if use_pca:
+        pca = PCA(n_components=2)
+        values = pca.fit_transform(values)
+        plt.xlabel("Component 1")
+        plt.ylabel("Component 2")
+    else:
+        plt.xlabel("z[0]")
+        plt.ylabel("z[1]")
 
-def plot_latent_space_PCA(encoder: Module, test_x: Tensor, test_labels: Tensor):
-    """
-    Display a 2D plot of the digit classes in the latent space using Principal Component Analysis (PCA)
-    :param encoder: encoder network extending torch.nn.Module
-    :param test_x: test image data
-    :param test_labels: test image labels [0-9]
-    :return:
-    """
-    z_mean, _ = encoder(test_x)
-    z_mean = z_mean.cpu().detach().numpy()
-    plt.figure(figsize=(12, 10))
-    plt.scatter(z_mean[:, 0], z_mean[:, 1], c=test_labels)
-    plt.colorbar()
-    plt.xlabel("z[0]")
-    plt.ylabel("z[1]")
+    c_map = mpl.cm.viridis
+    bounds = np.linspace(0, 9, 10)
+    norm = mpl.colors.BoundaryNorm(bounds, c_map.N, extend='both')
+    plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=c_map))
+    plt.scatter(values[:, 0], values[:, 1], c=test_labels)
     plt.show()
 
 
@@ -86,7 +87,7 @@ def plot_interpolation(distribution: str, encoder: Module, decoder: Module, test
 
         for j, lambda_ in enumerate(lin_space):
 
-            if distribution == 'categorical':
+            if distribution == 'categorical' or distribution == 'bernoulli':
                 z1 = encoder(x1)
                 z2 = encoder(x2)
             else:
@@ -96,7 +97,7 @@ def plot_interpolation(distribution: str, encoder: Module, decoder: Module, test
             # Interpolate between the two latent vectors
             z = lambda_ * z1 + (1 - lambda_) * z2
 
-            if distribution == 'categorical':
+            if distribution == 'categorical' or distribution == 'bernoulli':
                 z = gumbel_softmax(z)
 
             # Decode the interpolated latent vector
@@ -135,7 +136,7 @@ def plot_reconstruction(distribution: str, encoder: Module, decoder: Module, dev
     x_reshaped = input_x.reshape(n_samples, img_size, img_size).unsqueeze(1)
 
     # Encode the input
-    if distribution == 'categorical':
+    if distribution == 'categorical' or distribution == 'bernoulli':
         z = encoder(x_reshaped)
         z = gumbel_softmax(z)
     else:
