@@ -3,3 +3,4 @@ data/
 img_vae/
 img_vae_mlp/
 models/
+.ipynb_checkpoints/
