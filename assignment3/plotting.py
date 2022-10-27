@@ -10,6 +10,8 @@ from torch.nn import Module
 from torch.nn.functional import gumbel_softmax
 
 from assignment3 import datasets
+from assignment3.utils import log_beta_pdf
+from assignment3.vae import VAE
 
 
 def plot_loss(loss_history: list, save_path: str = None):
@@ -35,7 +37,7 @@ def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_l
     :param use_pca: whether to use PCA to reduce the dimensionality of the latent space
     :return:
     """
-    if distribution == 'categorical' or distribution == 'bernoulli':
+    if distribution == 'bernoulli':
         z_mean = encoder(test_x)
     else:
         z_mean, _ = encoder(test_x)
@@ -59,13 +61,12 @@ def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_l
     plt.show()
 
 
-def plot_interpolation(distribution: str, encoder: Module, decoder: Module, test_x: Tensor, test_labels: Tensor,
+def plot_interpolation(distribution: str, vae: VAE, test_x: Tensor, test_labels: Tensor,
                        digit_size=28, k=15):
     """
     Plot interpolation between two pair-wise sampled digits in the latent space.
     :param distribution: type of the latent distribution
-    :param encoder: encoder network extending torch.nn.Module
-    :param decoder: decoder network extending torch.nn.Module
+    :param vae: VAE model
     :param test_x: test image data
     :param test_labels: test image labels [0-9]
     :param digit_size: number of pixels of the width/height of the square MNIST digit image
@@ -87,24 +88,33 @@ def plot_interpolation(distribution: str, encoder: Module, decoder: Module, test
 
         for j, lambda_ in enumerate(lin_space):
 
-            if distribution == 'categorical' or distribution == 'bernoulli':
-                z1 = encoder(x1)
-                z2 = encoder(x2)
+            if distribution == 'bernoulli':
+                z1 = vae.encode(x1)
+                z2 = vae.encode(x2)
             else:
-                z1, _ = encoder(x1)
-                z2, _ = encoder(x2)
+                z1, _ = vae.encode(x1)
+                z2, _ = vae.encode(x2)
 
             # Interpolate between the two latent vectors
             z = lambda_ * z1 + (1 - lambda_) * z2
 
-            if distribution == 'categorical' or distribution == 'bernoulli':
+            if distribution == 'bernoulli':
                 z = gumbel_softmax(z)
 
             # Decode the interpolated latent vector
-            x = decoder(z).reshape(digit_size, digit_size).cpu().detach().numpy()
+            if distribution == 'beta':
+                alpha, beta = vae.decode(z)
+                x = log_beta_pdf(x1.reshape(1, digit_size * digit_size), alpha, beta)
+                x = x.reshape(1, 1, digit_size, digit_size)
+            else:
+                x = vae.decode(z).reshape(digit_size, digit_size)
+
+            if distribution == 'bernoulli':
+                x = torch.bernoulli(x)
 
             # Plot the interpolated digit
-            figure[row * digit_size: (row + 1) * digit_size, j * digit_size: (j + 1) * digit_size] = x
+            figure[row * digit_size: (row + 1) * digit_size,
+            j * digit_size: (j + 1) * digit_size] = x.detach().cpu().numpy()
         row += 1
 
     plt.figure(figsize=(10, 10))
@@ -119,39 +129,42 @@ def plot_interpolation(distribution: str, encoder: Module, decoder: Module, test
     plt.show()
 
 
-def plot_reconstruction(distribution: str, encoder: Module, decoder: Module, device: str, input_x: Tensor,
-                        n_samples: int, file_path: str, img_size: int):
+def plot_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: int, file_path: str, img_size: int):
     """
     Plot the reconstruction of the input samples
-    :param distribution: type of the latent distribution
-    :param encoder: encoder network extending torch.nn.Module
-    :param decoder: decoder network extending torch.nn.Module
-    :param device: cpu/cuda
-    :param input_x: input images
+    :param dist_type: type of the latent distribution
+    :param vae: VAE model
+    :param x_input: input images
     :param n_samples: number of new images to generate
     :param file_path: path to save the plot
     :param img_size: number of pixels of the width/height of the square MNIST digit image
     """
     # Reshape the input
-    x_reshaped = input_x.reshape(n_samples, img_size, img_size).unsqueeze(1)
+    x_reshaped = x_input.reshape(n_samples, img_size, img_size).unsqueeze(1)
 
-    # Encode the input
-    if distribution == 'categorical' or distribution == 'bernoulli':
-        z = encoder(x_reshaped)
-        z = gumbel_softmax(z)
+    if dist_type == 'gaussian':
+        x_decoded = vae.forward(x_reshaped)
+    elif dist_type == 'bernoulli':
+        x_decoded, _ = vae.forward(x_reshaped)
+        x_decoded = torch.bernoulli(x_decoded)
+        x_input = torch.bernoulli(x_input)
+    elif dist_type == 'beta':
+        alpha, beta = vae.forward(x_reshaped)
+        x_decoded = log_beta_pdf(x_input, alpha, beta)
+        x_decoded = torch.sigmoid(x_decoded)
+    elif dist_type == 'categorical':
+        x_decoded = vae.forward(x_reshaped)
+        x_decoded = gumbel_softmax(x_decoded)
+        x_input = gumbel_softmax(x_input)
     else:
-        mu_z, var_z = encoder(x_reshaped)
-        z = mu_z + torch.sqrt(var_z) * torch.randn(n_samples, encoder.n_latent, device=device)
-
-    # Decode the latent vector
-    x_decoded = decoder(z)
+        raise ValueError(f"Unknown distribution type: {dist_type}")
 
     # Generate new images by sampling from the latent space
-    samples, _ = decoder.sample(n_samples, device)
+    samples, _ = vae.sample(n_samples)
 
     # Save images
     n_rows = 3
-    plot_img = np.stack((input_x.detach().cpu().numpy(),
+    plot_img = np.stack((x_input.detach().cpu().numpy(),
                          x_decoded.detach().cpu().numpy(),
                          samples.detach().cpu().numpy()))
     plot_img = np.reshape(plot_img, (n_samples * n_rows, img_size, img_size))

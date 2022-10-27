@@ -2,16 +2,13 @@ import argparse
 import os
 from math import sqrt
 
-import numpy as np
 import torch
-from torch.nn.functional import gumbel_softmax, binary_cross_entropy
 from tqdm import tqdm
 
 import datasets
-from assignment3.model import ConvEncoder, ConvDecoder, CategoricalEncoder, CategoricalDecoder, BernoulliEncoder, \
-    BernoulliDecoder
-from assignment3.plotting import plot_interpolation, plot_latent_space, plot_loss, plot_reconstruction
-from assignment3.utils import categorical_kl, binomial_kl
+from assignment3.model import GaussianEncoder, BernoulliEncoder
+from assignment3.plotting import plot_interpolation, plot_loss, plot_reconstruction, plot_latent_space
+from assignment3.vae import GaussianVAE, BernoulliVAE, BetaVAE, CategoricalVAE
 
 if __name__ == '__main__':
 
@@ -35,11 +32,11 @@ if __name__ == '__main__':
 
     # Training parameters
     n_latent = 50
-    n_distributions = 50
+    n_bins = 50
     batch_size = 50
     num_epochs = 100
     learning_rate = 1e-4
-    stop_criterion = 50
+    stop_criterion = -500
     # Use a fixed variance for the decoder for more robust training
     var_x = 0.05
 
@@ -71,24 +68,33 @@ if __name__ == '__main__':
     # Determine the number of classes
     n_classes = len(set(train_labels))
 
-    # Create and print the encoder and decoder networks
-    if dist_type == 'categorical':
-        encoder = CategoricalEncoder(n_classes, n_distributions).to(device)
-        decoder = CategoricalDecoder(train_D, n_classes, n_distributions).to(device)
-    elif dist_type == 'bernoulli':
-        encoder = BernoulliEncoder(n_latent).to(device)
-        decoder = BernoulliDecoder(n_latent).to(device)
-    else:
-        encoder = ConvEncoder(n_latent).to(device)
-        decoder = ConvDecoder(train_D, n_latent, var=var_x).to(device)
-    print(encoder)
-    print(decoder)
+    vae = None
 
-    print(f'Number of encoder parameters: {sum(p.numel() for p in encoder.parameters())}')
-    print(f'Number of decoder parameters: {sum(p.numel() for p in decoder.parameters())}')
+    # Create the encoder network
+    if dist_type == 'bernoulli':
+        encoder = BernoulliEncoder(n_latent)
+    else:
+        encoder = GaussianEncoder(n_latent)
+
+    # Create the decoder network
+    if dist_type == 'gaussian':
+        vae = GaussianVAE(n_latent, train_D, device)
+    elif dist_type == 'categorical':
+        vae = CategoricalVAE(n_latent, train_D, device, n_bins)
+    elif dist_type == 'bernoulli':
+        vae = BernoulliVAE(n_latent, train_D, device)
+    elif dist_type == 'beta':
+        vae = BetaVAE(n_latent, train_D, device)
+    else:
+        raise ValueError(f'Unknown distribution type {dist_type}')
+
+    print(vae.encoder)
+    print(vae.decoder)
+    print(f'Number of encoder parameters: {sum(p.numel() for p in vae.encoder.parameters())}')
+    print(f'Number of decoder parameters: {sum(p.numel() for p in vae.decoder.parameters())}')
 
     # Use Adam as the optimizer for both the encoder and decoder
-    optimizer = torch.optim.Adam(list(decoder.parameters()) + list(encoder.parameters()), lr=learning_rate)
+    optimizer = torch.optim.Adam(list(vae.decoder.parameters()) + list(vae.encoder.parameters()), lr=learning_rate)
 
     loss_history = []
     for epoch in tqdm(range(num_epochs)):
@@ -101,42 +107,7 @@ if __name__ == '__main__':
             batch_x = train_x[idx, :]
             input_x = batch_x.reshape(batch_size, img_size, img_size).unsqueeze(1)
 
-            if dist_type == 'categorical':
-                z = encoder(input_x)
-                z_given_x = gumbel_softmax(z)
-                x_decoded = decoder(z_given_x)
-                KL = torch.mean(torch.sum(categorical_kl(z, device), dim=1))
-                reconstruction = x_decoded + sqrt(decoder.var) * torch.randn(batch_x.shape[1], device=device)
-            elif dist_type == 'bernoulli':
-                input_x_binary = torch.bernoulli(input_x)
-                z = encoder(input_x_binary)
-                z_given_x = gumbel_softmax(z)
-                x_decoded = decoder(z_given_x)
-            else:
-                batch_mu_z, batch_var_z = encoder(input_x)
-                # Sample z using the reparameterization trick
-                z = batch_mu_z + torch.sqrt(batch_var_z) * torch.randn(batch_var_z.shape, device=device)
-                x_decoded = decoder(z)
-                KL = -0.5 * torch.sum(1 + torch.log(batch_var_z) - batch_mu_z**2 - batch_var_z)
-                reconstruction = x_decoded + sqrt(decoder.var) * torch.randn(batch_x.shape[1], device=device)
-
-            if dist_type == 'bernoulli':
-                entropy = binary_cross_entropy(x_decoded, batch_x)
-                KL = torch.mean(torch.sum(binomial_kl(z, device), dim=1))
-
-                # loss = entropy + KL
-                loss = entropy
-
-            else:
-                # Squared distances between the original input and the reconstruction
-                d2 = (reconstruction - batch_x)**2
-
-                # Gaussian likelihood: 1/sqrt(2*pi*var) exp(-0.5 * (mu-x)**2 / var)
-                # Thus, log-likelihood = -0.5 * ( log(2*pi*var) + (mu-x)**2 / var )
-                log_p = -0.5 * torch.sum(np.log(decoder.var * 2 * np.pi) + d2 / decoder.var)
-                # We want to maximize the ELBO, hence minimize the negative ELBO
-                loss = KL - log_p
-
+            loss = vae.loss(input_x)
             loss.backward()
             optimizer.step()
             sum_loss += loss
@@ -147,13 +118,13 @@ if __name__ == '__main__':
         if epoch % plot_interval == 0:
             with torch.no_grad():
                 # Store the model weights
-                torch.save(encoder.state_dict(), os.path.join(model_path, f'encoder_{epoch}.pt'))
-                torch.save(decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
+                torch.save(vae.encoder.state_dict(), os.path.join(model_path, f'encoder_{epoch}.pt'))
+                torch.save(vae.decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
 
                 # Plot and save the ELBO curve and data reconstruction
-                samples = train_x[0:n_samples, :]
+                samples = test_x[0:n_samples, :]
                 file_name = os.path.join(img_path, f'samples_{epoch}.png')
-                plot_reconstruction(dist_type, encoder, decoder, device, samples, n_samples, file_name, img_size)
+                plot_reconstruction(dist_type, vae, samples, n_samples, file_name, img_size)
                 plot_loss(loss_history, img_path)
 
         if mean_loss < stop_criterion:
@@ -163,10 +134,10 @@ if __name__ == '__main__':
             torch.save(decoder.state_dict(), os.path.join(model_path, f'decoder.pt'))
             break
 
-    test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
-    plot_latent_space(dist_type, encoder, test_input[:1000], test_labels[:1000])
-    plot_latent_space(dist_type, encoder, test_input[:1000], test_labels[:1000], use_pca=True)
-    plot_interpolation(dist_type, encoder, decoder, test_input, test_labels)
+        test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
+        plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000])
+        plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
+        plot_interpolation(dist_type, vae, test_input, test_labels)
 
     samples = test_x[0:n_samples, :]
     file_name = os.path.join(img_path, 'samples_test.png')
