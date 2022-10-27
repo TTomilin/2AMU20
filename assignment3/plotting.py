@@ -1,3 +1,4 @@
+from itertools import chain
 from os import path
 
 import matplotlib as mpl
@@ -6,6 +7,7 @@ import torch
 from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 from torch import Tensor
+from torch.distributions import Categorical
 from torch.nn import Module
 from torch.nn.functional import gumbel_softmax
 
@@ -129,7 +131,7 @@ def plot_interpolation(distribution: str, vae: VAE, test_x: Tensor, test_labels:
     plt.show()
 
 
-def plot_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: int, file_path: str, img_size: int):
+def save_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: int, file_path: str, img_size: int):
     """
     Plot the reconstruction of the input samples
     :param dist_type: type of the latent distribution
@@ -145,7 +147,7 @@ def plot_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: in
     if dist_type == 'gaussian':
         x_decoded = vae.forward(x_reshaped)
     elif dist_type == 'bernoulli':
-        x_decoded, _ = vae.forward(x_reshaped)
+        x_decoded = vae.forward(x_reshaped)
         x_decoded = torch.bernoulli(x_decoded)
         x_input = torch.bernoulli(x_input)
     elif dist_type == 'beta':
@@ -153,9 +155,13 @@ def plot_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: in
         x_decoded = log_beta_pdf(x_input, alpha, beta)
         x_decoded = torch.sigmoid(x_decoded)
     elif dist_type == 'categorical':
+        pixels_per_bin = 5
+        # x_reshaped = torch.floor(x_reshaped / pixels_per_bin)
         x_decoded = vae.forward(x_reshaped)
-        x_decoded = gumbel_softmax(x_decoded)
-        x_input = gumbel_softmax(x_input)
+        x_one_hot = torch.nn.functional.one_hot(x_reshaped.flatten(1).to(torch.int64), num_classes=vae.decoder.n_bins)
+        x_decoded = torch.sum(x_one_hot * torch.log(x_decoded), dim=1)
+        # x_decoded = gumbel_softmax(x_decoded)
+        # x_input = gumbel_softmax(x_input)
     else:
         raise ValueError(f"Unknown distribution type: {dist_type}")
 
@@ -169,3 +175,62 @@ def plot_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: in
                          samples.detach().cpu().numpy()))
     plot_img = np.reshape(plot_img, (n_samples * n_rows, img_size, img_size))
     datasets.save_image_stack(plot_img, n_rows, n_samples, file_path, margin=3)
+
+
+def plot_reconstruction(vae: VAE, dist_type: str, n_samples: int, img_size: int, samples=None, reconstruct=False):
+    # Reconstruct the input images
+    if reconstruct:
+        samples = samples.reshape(n_samples, img_size, img_size)
+        images = samples.unsqueeze(1)
+
+        if dist_type == 'gaussian':
+            x_hat = vae.forward(images)
+        elif dist_type == 'beta':
+            alpha, beta = vae.forward(images)
+            variance = (alpha * beta) / ((alpha + beta).pow(2) * (alpha + beta + 1))
+            x_hat = alpha / (alpha + beta) + variance * torch.randn_like(variance)
+        elif dist_type == 'categorical':
+            pmf = vae.forward(images)
+            dist = Categorical(pmf)
+            x_hat = dist.sample() / vae.decoder.n_bins
+        elif dist_type == 'bernoulli':
+            pmf = vae.forward(images)
+            x_hat = torch.bernoulli(pmf)
+            samples = torch.bernoulli(samples)
+        else:
+            raise ValueError(f"Unknown distribution type: {dist_type}")
+
+        x_hat = x_hat.reshape(n_samples, img_size, img_size).detach().cpu().numpy()
+
+        images = images.squeeze().detach().cpu().numpy()
+        plot_images = list(chain.from_iterable(zip(images, x_hat)))
+    else:
+        samples = vae.sample(n_samples)
+        samples = samples.reshape(n_samples, img_size, img_size)
+        plot_images = samples.detach().cpu().numpy()
+
+    # Plot images
+    height = samples.shape[1]
+    width = samples.shape[2]
+
+    num_columns = 8
+    num_rows = len(plot_images) // num_columns
+    frame = 2
+    frame_gray_val = 1.0
+    margin = 5
+    margin_gray_val = 1.0
+
+    img = margin_gray_val * np.ones((height * num_rows + (num_rows - 1) * margin,
+                                     width * num_columns + (num_columns - 1) * margin))
+    counter = 0
+    for h in range(num_rows):
+        for w in range(num_columns):
+            img[h * (height + margin): h * (height + margin) + height,
+            w * (width + margin): w * (width + margin) + width] = plot_images[counter]
+            counter += 1
+
+    framed_img = frame_gray_val * np.ones((img.shape[0] + 2 * frame, img.shape[1] + 2 * frame))
+    framed_img[frame:(frame + img.shape[0]), frame:(frame + img.shape[1])] = img
+
+    plt.imshow(framed_img)
+    plt.show()

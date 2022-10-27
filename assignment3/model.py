@@ -1,5 +1,6 @@
 from math import sqrt
 
+import torch
 from torch import relu
 from torch.nn import Conv2d, Linear, BatchNorm2d, ConvTranspose2d, ELU, Softplus, Module, Sigmoid, Softmax, ModuleList
 
@@ -7,6 +8,7 @@ from torch.nn import Conv2d, Linear, BatchNorm2d, ConvTranspose2d, ELU, Softplus
 class BaseEncoder(Module):
     def __init__(self, n_latent: int, in_channels: int, n_conv_blocks: int, n_filters: int):
         super(BaseEncoder, self).__init__()
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.n_latent = n_latent
         conv_head = []
         for i in range(n_conv_blocks):
@@ -37,19 +39,14 @@ class GaussianEncoder(BaseEncoder):
         self.var = Linear(n_fc, n_latent)
         self.var_act = Softplus()
 
+    def reparameterize(self, mu, var):
+        return mu + torch.sqrt(var) * torch.randn(var.shape, device=self.device)
+
     def to_latent(self, flattened):
         mu = self.mu(flattened)
         var = self.var_act(self.var(flattened))
-        return mu, var
-
-
-class BernoulliEncoder(BaseEncoder):
-    def __init__(self, n_latent: int, in_channels=1, n_conv_blocks=3, n_filters=32, n_fc=2048):
-        super(BernoulliEncoder, self).__init__(n_latent, in_channels, n_conv_blocks, n_filters)
-        self.dense = Linear(n_fc, n_latent)
-
-    def to_latent(self, convoluted):
-        return self.dense(convoluted)
+        z = self.reparameterize(mu, var)
+        return z, mu, var
 
 
 class BaseDecoder(Module):
@@ -115,7 +112,6 @@ class CategoricalDecoder(BaseDecoder):
         out = self.out(deconvoluted)
         out = out.reshape(-1, self.n_pixels, self.n_bins)
         out = self.act(out)
-        out = out.argmax(dim=-1) / self.n_bins
         return out
 
 

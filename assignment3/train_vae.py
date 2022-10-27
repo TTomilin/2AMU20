@@ -6,8 +6,7 @@ import torch
 from tqdm import tqdm
 
 import datasets
-from assignment3.model import GaussianEncoder, BernoulliEncoder
-from assignment3.plotting import plot_interpolation, plot_loss, plot_reconstruction, plot_latent_space
+from assignment3.plotting import plot_reconstruction
 from assignment3.vae import GaussianVAE, BernoulliVAE, BetaVAE, CategoricalVAE
 
 if __name__ == '__main__':
@@ -31,17 +30,17 @@ if __name__ == '__main__':
     datasets.mkdir_p(model_path)
 
     # Training parameters
-    n_latent = 50
-    n_bins = 50
+    n_latent = 16
+    n_bins = 51
     batch_size = 50
     num_epochs = 100
     learning_rate = 1e-4
-    stop_criterion = -500
+    stop_criterion = -500000
     # Use a fixed variance for the decoder for more robust training
     var_x = 0.05
 
     # Inference parameters
-    n_samples = 10
+    n_samples = 32
     plot_interval = 5
 
     # Download and load the data if needed (MNIST or fashion-MNIST)
@@ -68,23 +67,15 @@ if __name__ == '__main__':
     # Determine the number of classes
     n_classes = len(set(train_labels))
 
-    vae = None
-
-    # Create the encoder network
-    if dist_type == 'bernoulli':
-        encoder = BernoulliEncoder(n_latent)
-    else:
-        encoder = GaussianEncoder(n_latent)
-
     # Create the decoder network
     if dist_type == 'gaussian':
-        vae = GaussianVAE(n_latent, train_D, device)
+        vae = GaussianVAE(n_latent, train_D)
     elif dist_type == 'categorical':
-        vae = CategoricalVAE(n_latent, train_D, device, n_bins)
+        vae = CategoricalVAE(n_latent, train_D, n_bins)
     elif dist_type == 'bernoulli':
-        vae = BernoulliVAE(n_latent, train_D, device)
+        vae = BernoulliVAE(n_latent, train_D)
     elif dist_type == 'beta':
-        vae = BetaVAE(n_latent, train_D, device)
+        vae = BetaVAE(n_latent, train_D)
     else:
         raise ValueError(f'Unknown distribution type {dist_type}')
 
@@ -107,7 +98,7 @@ if __name__ == '__main__':
             batch_x = train_x[idx, :]
             input_x = batch_x.reshape(batch_size, img_size, img_size).unsqueeze(1)
 
-            loss = vae.loss(input_x)
+            loss = vae.elbo(input_x)
             loss.backward()
             optimizer.step()
             sum_loss += loss
@@ -121,24 +112,45 @@ if __name__ == '__main__':
                 torch.save(vae.encoder.state_dict(), os.path.join(model_path, f'encoder_{epoch}.pt'))
                 torch.save(vae.decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
 
-                # Plot and save the ELBO curve and data reconstruction
-                samples = test_x[0:n_samples, :]
-                file_name = os.path.join(img_path, f'samples_{epoch}.png')
-                plot_reconstruction(dist_type, vae, samples, n_samples, file_name, img_size)
-                plot_loss(loss_history, img_path)
-
         if mean_loss < stop_criterion:
             print('Training criterion reached. Stopping training.')
             # Store the model weights
-            torch.save(encoder.state_dict(), os.path.join(model_path, f'encoder.pt'))
-            torch.save(decoder.state_dict(), os.path.join(model_path, f'decoder.pt'))
+            torch.save(vae.encoder.state_dict(), os.path.join(model_path, 'encoder.pt'))
+            torch.save(vae.decoder.state_dict(), os.path.join(model_path, 'decoder.pt'))
             break
 
+        # Plot and save the ELBO curve and data reconstruction
+        samples = test_x[0:n_samples, :]
+        plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=True)
+        plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=False)
+        # plot_loss(loss_history, img_path)
+
         test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
-        plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000])
-        plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
-        plot_interpolation(dist_type, vae, test_input, test_labels)
+        # plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000])
+        # plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
+        # plot_interpolation(dist_type, vae, test_input, test_labels)
 
     samples = test_x[0:n_samples, :]
-    file_name = os.path.join(img_path, 'samples_test.png')
-    plot_reconstruction(dist_type, encoder, decoder, device, samples, n_samples, file_name, img_size)
+    plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=True)
+    plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=False)
+
+
+class EarlyStopper:
+    def __init__(self, patience=1, min_delta=0.5):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+
+    def __call__(self, validation_loss, previous_validation_loss):
+        if validation_loss >= previous_validation_loss:
+            self.counter += 1
+        elif np.abs(previous_validation_loss - validation_loss) < self.min_delta:
+            self.counter += 1
+        elif previous_validation_loss - validation_loss >= self.min_delta:
+            self.counter = 0
+            previous_validation_loss = validation_loss
+
+        if self.counter > self.patience:
+            return True
+        else:
+            return False

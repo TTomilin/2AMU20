@@ -41,6 +41,10 @@ def binomial_kl(z: torch.Tensor, device: str) -> torch.Tensor:
     return KL
 
 
+def kl_loss(mu_z, var_z):
+    return torch.mean(0.5 * torch.sum(mu_z**2 + var_z**2 - torch.log(var_z**2) - 1, dim=1))
+
+
 def log_beta_pdf(batch_x, alpha, beta, eps=1e-8):
     """
     Calculate the log pdf of a beta distribution
@@ -50,5 +54,5 @@ def log_beta_pdf(batch_x, alpha, beta, eps=1e-8):
     :param eps: epsilon to avoid numerical issues when taking logarithms
     :return: log pdf of the beta distribution
     """
-    return -(torch.lgamma(alpha + beta) - torch.lgamma(alpha) - torch.lgamma(beta) + (alpha - 1) * torch.log(
-        batch_x + eps) + (beta - 1) * torch.log(1 - batch_x + eps))
+    return torch.lgamma(alpha + beta) - torch.lgamma(alpha) - torch.lgamma(beta) + (alpha - 1) * torch.log(
+        batch_x + eps) + (beta - 1) * torch.log(1 - batch_x + eps)
