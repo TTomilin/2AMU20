@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 import torch.distributions as dist
 
@@ -56,3 +58,27 @@ def log_beta_pdf(batch_x, alpha, beta, eps=1e-8):
     """
     return torch.lgamma(alpha + beta) - torch.lgamma(alpha) - torch.lgamma(beta) + (alpha - 1) * torch.log(
         batch_x + eps) + (beta - 1) * torch.log(1 - batch_x + eps)
+
+
+class EarlyStopping:
+    def __init__(self, threshold: float, patience=3):
+        """
+        :param threshold: The loss decrease threshold to consider for early stopping
+        :param patience: The number of epochs to wait before stopping
+        """
+        self.threshold = threshold
+        self.patience = patience
+        self.last_loss = float("inf")
+        self.counter = 0
+
+    def __call__(self, loss: float) -> bool:
+        """
+        :param loss: The current loss
+        :return: True if the training should stop, False otherwise
+        """
+        if loss >= self.last_loss or self.last_loss - loss < self.threshold:
+            self.counter += 1
+        else:
+            self.counter = 0
+        self.last_loss = loss
+        return self.counter >= self.patience

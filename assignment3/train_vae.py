@@ -6,7 +6,8 @@ import torch
 from tqdm import tqdm
 
 import datasets
-from assignment3.plotting import plot_reconstruction
+from assignment3.plotting import plot_reconstruction, plot_latent_space, plot_interpolation, plot_loss
+from assignment3.utils import EarlyStopping
 from assignment3.vae import GaussianVAE, BernoulliVAE, BetaVAE, CategoricalVAE
 
 if __name__ == '__main__':
@@ -35,7 +36,6 @@ if __name__ == '__main__':
     batch_size = 50
     num_epochs = 100
     learning_rate = 1e-4
-    stop_criterion = -500000
     # Use a fixed variance for the decoder for more robust training
     var_x = 0.05
 
@@ -70,12 +70,16 @@ if __name__ == '__main__':
     # Create the decoder network
     if dist_type == 'gaussian':
         vae = GaussianVAE(n_latent, train_D)
+        stop_threshold = 0.1
     elif dist_type == 'categorical':
         vae = CategoricalVAE(n_latent, train_D, n_bins)
+        stop_threshold = 0.1
     elif dist_type == 'bernoulli':
         vae = BernoulliVAE(n_latent, train_D)
+        stop_threshold = 0.1
     elif dist_type == 'beta':
         vae = BetaVAE(n_latent, train_D)
+        stop_threshold = 0.1
     else:
         raise ValueError(f'Unknown distribution type {dist_type}')
 
@@ -86,6 +90,9 @@ if __name__ == '__main__':
 
     # Use Adam as the optimizer for both the encoder and decoder
     optimizer = torch.optim.Adam(list(vae.decoder.parameters()) + list(vae.encoder.parameters()), lr=learning_rate)
+
+    # Use early stopping to stop training when the validation loss stops improving
+    stop_early = EarlyStopping(stop_threshold)
 
     loss_history = []
     for epoch in tqdm(range(num_epochs)):
@@ -103,8 +110,9 @@ if __name__ == '__main__':
             optimizer.step()
             sum_loss += loss
         mean_loss = sum_loss / train_x.shape[0]
+        mean_loss = mean_loss.cpu().detach().numpy()
         print(f'Epoch {epoch}. Loss = {mean_loss}')
-        loss_history.append(mean_loss.cpu().detach().numpy())
+        loss_history.append(mean_loss)
 
         if epoch % plot_interval == 0:
             with torch.no_grad():
@@ -112,27 +120,22 @@ if __name__ == '__main__':
                 torch.save(vae.encoder.state_dict(), os.path.join(model_path, f'encoder_{epoch}.pt'))
                 torch.save(vae.decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
 
-        if mean_loss < stop_criterion:
-            print('Training criterion reached. Stopping training.')
+        if stop_early(mean_loss):
+            print('Training criterion reached. Stopping training...')
             # Store the model weights
             torch.save(vae.encoder.state_dict(), os.path.join(model_path, 'encoder.pt'))
             torch.save(vae.decoder.state_dict(), os.path.join(model_path, 'decoder.pt'))
             break
 
-        # Plot and save the ELBO curve and data reconstruction
-        samples = test_x[0:n_samples, :]
-        plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=True)
-        plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=False)
-        # plot_loss(loss_history, img_path)
-
-        test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
-        # plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000])
-        # plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
-        # plot_interpolation(dist_type, vae, test_input, test_labels)
-
-    samples = test_x[0:n_samples, :]
-    plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=True)
-    plot_reconstruction(vae, dist_type, n_samples, img_size, samples, reconstruct=False)
+    # Plot and save the ELBO curve and data reconstruction
+    test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
+    test_samples = test_x[0:n_samples, :]
+    plot_loss(loss_history, img_path)
+    plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000])
+    plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
+    plot_interpolation(dist_type, vae, test_input, test_labels)
+    plot_reconstruction(vae, dist_type, n_samples, img_size, test_samples, reconstruct=True)
+    plot_reconstruction(vae, dist_type, n_samples, img_size, test_samples, reconstruct=False)
 
 
 class EarlyStopper:
