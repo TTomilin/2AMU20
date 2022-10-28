@@ -63,6 +63,10 @@ class CategoricalVAE(VAE):
         super().__init__(GaussianEncoder(n_latent), CategoricalDecoder(n_pixels, n_latent, n_bins))
         self.n_latent = n_latent
 
+    def forward(self, x):
+        x_cat = torch.floor(x * (self.decoder.n_bins - 1))
+        return super().forward(x_cat)
+
     def elbo(self, x):
         x = torch.floor(x * (self.decoder.n_bins - 1))
         z, mu_z, var_z = self.encode(x)

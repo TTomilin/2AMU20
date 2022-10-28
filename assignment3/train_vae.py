@@ -71,10 +71,10 @@ if __name__ == '__main__':
     # Create the decoder network
     if dist_type == 'gaussian':
         vae = GaussianVAE(n_latent, train_D)
-        stop_threshold = 5
+        stop_threshold = 2
     elif dist_type == 'categorical':
         vae = CategoricalVAE(n_latent, train_D, n_bins)
-        stop_threshold = 0.1
+        stop_threshold = 10
     elif dist_type == 'bernoulli':
         vae = BernoulliVAE(n_latent, train_D)
         stop_threshold = 0.1
@@ -97,13 +97,13 @@ if __name__ == '__main__':
 
     train_loss_history = []
     val_loss_history = []
-    pbar = tqdm(range(num_epochs))
+    pbar = tqdm(range(num_epochs), position=0, leave=False)
     for epoch in pbar:
         vae.train()
         # make batches of training indices
         shuffled_idx = torch.randperm(train_x.shape[0])
         idx_batches = shuffled_idx.split(batch_size)
-        sum_loss = 0.0
+        train_loss, val_loss = 0, 0
         for batch_count, idx in enumerate(idx_batches):
             optimizer.zero_grad()
             batch_x = train_x[idx, :]
@@ -112,9 +112,8 @@ if __name__ == '__main__':
             loss = vae.elbo(input_x)
             loss.backward()
             optimizer.step()
-            sum_loss += loss
-        train_loss = sum_loss / train_x.shape[0]
-        train_loss_history.append(train_loss.item())
+            train_loss += loss.item()
+        train_loss_history.append(train_loss / train_x.shape[0])
 
         if epoch % plot_interval == 0:
             with torch.no_grad():
@@ -123,7 +122,6 @@ if __name__ == '__main__':
                 torch.save(vae.decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
 
         with torch.no_grad():
-            val_loss = 0
             vae.eval()
             shuffled_idx = torch.randperm(val_x.shape[0])
             idx_batches = shuffled_idx.split(batch_size)
@@ -136,9 +134,10 @@ if __name__ == '__main__':
 
             val_loss_history.append(val_loss / val_x.shape[0])
 
-        pbar.set_postfix({'Train Loss': train_loss, 'Val Loss': val_loss})
+        pbar.set_postfix({'Train Loss': round(train_loss, 4), 'Validation Loss': round(val_loss, 4)})
+        print()
 
-        if stop_early(train_loss):
+        if stop_early(train_loss_history[-1]):
             print(f'Training criterion reached at epoch {epoch}. Stopping training...')
             # Store the model weights
             torch.save(vae.encoder.state_dict(), os.path.join(model_path, 'encoder.pt'))
@@ -146,11 +145,11 @@ if __name__ == '__main__':
             break
 
         # Plot and save the ELBO curve and data reconstruction
-        plot_loss(train_loss_history, val_loss_history, img_path)
-        test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
+        # plot_loss(train_loss_history, val_loss_history, img_path)
+        # test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
         test_samples = test_x[0:n_samples, :]
-        plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000])
-        plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
-        plot_interpolation(vae, test_input, test_labels, img_size)
+        # plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000])
+        # plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
+        # plot_interpolation(vae, test_input, test_labels, img_size)
         plot_reconstruction(vae, n_samples, img_size, test_samples, reconstruct=True)
         plot_reconstruction(vae, n_samples, img_size, test_samples, reconstruct=False)
