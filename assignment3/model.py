@@ -2,6 +2,7 @@ from math import sqrt
 
 import torch
 from torch import relu
+from torch.distributions import Categorical
 from torch.nn import Conv2d, Linear, BatchNorm2d, ConvTranspose2d, ELU, Softplus, Module, Sigmoid, Softmax, ModuleList
 
 
@@ -72,6 +73,9 @@ class BaseDecoder(Module):
     def output(self, deconvoluted):
         raise NotImplementedError
 
+    def reconstruct(self, z):
+        raise NotImplementedError
+
     def forward(self, z):
         # First run the latent vector through a dense layer
         res = relu(self.dense(z))
@@ -84,6 +88,7 @@ class BaseDecoder(Module):
 
 
 class GaussianDecoder(BaseDecoder):
+
     def __init__(self, n_pixels: int, n_latent: int, n_deconv_blocks=3, in_channels=128, n_fc=2048, var=0.05):
         super(GaussianDecoder, self).__init__(n_latent, n_deconv_blocks, in_channels, n_fc)
         self.n_latent = n_latent
@@ -96,6 +101,9 @@ class GaussianDecoder(BaseDecoder):
 
     def output(self, deconvoluted):
         return self.mu(deconvoluted)
+
+    def reconstruct(self, z):
+        return self.forward(z)
 
 
 class CategoricalDecoder(BaseDecoder):
@@ -114,6 +122,11 @@ class CategoricalDecoder(BaseDecoder):
         out = self.act(out)
         return out
 
+    def reconstruct(self, z):
+        pmf = self.forward(z)
+        dist = Categorical(pmf)
+        return dist.sample() / self.n_bins
+
 
 class BernoulliDecoder(BaseDecoder):
     def __init__(self, n_pixels: int, n_latent: int, n_deconv_blocks=3, in_channels=128, n_fc=2048, var=0.05):
@@ -124,6 +137,10 @@ class BernoulliDecoder(BaseDecoder):
 
     def output(self, deconvoluted):
         return self.out_act(self.out(deconvoluted))
+
+    def reconstruct(self, z):
+        pmf = self.forward(z)
+        return torch.bernoulli(pmf)
 
 
 class BetaDecoder(BaseDecoder):
@@ -141,3 +158,8 @@ class BetaDecoder(BaseDecoder):
         alpha = self.act(self.alpha(deconvoluted))
         beta = self.act(self.beta(deconvoluted))
         return alpha, beta
+
+    def reconstruct(self, z):
+        alpha, beta = self.forward(z)
+        variance = (alpha * beta) / ((alpha + beta).pow(2) * (alpha + beta + 1))
+        return alpha / (alpha + beta) + variance * torch.randn_like(variance)

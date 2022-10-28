@@ -70,7 +70,7 @@ if __name__ == '__main__':
     # Create the decoder network
     if dist_type == 'gaussian':
         vae = GaussianVAE(n_latent, train_D)
-        stop_threshold = 0.1
+        stop_threshold = 5
     elif dist_type == 'categorical':
         vae = CategoricalVAE(n_latent, train_D, n_bins)
         stop_threshold = 0.1
@@ -79,7 +79,7 @@ if __name__ == '__main__':
         stop_threshold = 0.1
     elif dist_type == 'beta':
         vae = BetaVAE(n_latent, train_D)
-        stop_threshold = 0.1
+        stop_threshold = 10
     else:
         raise ValueError(f'Unknown distribution type {dist_type}')
 
@@ -127,15 +127,15 @@ if __name__ == '__main__':
             torch.save(vae.decoder.state_dict(), os.path.join(model_path, 'decoder.pt'))
             break
 
-    # Plot and save the ELBO curve and data reconstruction
-    test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
-    test_samples = test_x[0:n_samples, :]
-    plot_loss(loss_history, img_path)
-    plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000])
-    plot_latent_space(dist_type, vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
-    plot_interpolation(dist_type, vae, test_input, test_labels)
-    plot_reconstruction(vae, dist_type, n_samples, img_size, test_samples, reconstruct=True)
-    plot_reconstruction(vae, dist_type, n_samples, img_size, test_samples, reconstruct=False)
+        # Plot and save the ELBO curve and data reconstruction
+        test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
+        test_samples = test_x[0:n_samples, :]
+        plot_loss(loss_history, img_path)
+        plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000])
+        plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
+        plot_interpolation(vae, test_input, test_labels, img_size)
+        plot_reconstruction(vae, n_samples, img_size, test_samples, reconstruct=True)
+        plot_reconstruction(vae, n_samples, img_size, test_samples, reconstruct=False)
 
 
 class EarlyStopper:

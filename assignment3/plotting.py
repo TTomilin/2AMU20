@@ -29,21 +29,17 @@ def plot_loss(loss_history: list, save_path: str = None):
     plt.savefig(path.join(save_path, 'elbo.png'))
 
 
-def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_labels: Tensor, use_pca=False):
+def plot_latent_space(encoder: Module, test_x: Tensor, test_labels: Tensor, use_pca=False):
     """
     Display a 2D plot of the digit classes in the latent space
-    :param distribution: type of the latent distribution
     :param encoder: encoder network extending torch.nn.Module
     :param test_x: test image data
     :param test_labels: test image labels [0-9]
     :param use_pca: whether to use PCA to reduce the dimensionality of the latent space
     :return:
     """
-    if distribution == 'bernoulli':
-        z_mean = encoder(test_x)
-    else:
-        z_mean, _ = encoder(test_x)
-    values = z_mean.cpu().detach().numpy()
+    z, _, _ = encoder(test_x)
+    values = z.detach().cpu().numpy()
     plt.figure(figsize=(12, 10))
 
     if use_pca:
@@ -63,20 +59,18 @@ def plot_latent_space(distribution: str, encoder: Module, test_x: Tensor, test_l
     plt.show()
 
 
-def plot_interpolation(distribution: str, vae: VAE, test_x: Tensor, test_labels: Tensor,
-                       digit_size=28, k=15):
+def plot_interpolation(vae: VAE, test_x: Tensor, test_labels: Tensor, img_size: int, k=15):
     """
     Plot interpolation between two pair-wise sampled digits in the latent space.
-    :param distribution: type of the latent distribution
     :param vae: VAE model
     :param test_x: test image data
     :param test_labels: test image labels [0-9]
-    :param digit_size: number of pixels of the width/height of the square MNIST digit image
+    :param img_size: number of pixels of the width/height of the square MNIST digit image
     :param k: number of digit pairs to interpolate between
     """
     # 1D linearly spaced partition
     lin_space = np.linspace(0, 1, k)
-    figure = np.zeros((digit_size * k, digit_size * k))
+    figure = np.zeros((img_size * k, img_size * k))
     row = 0
     while row < k:
         # Sample two digits
@@ -85,44 +79,28 @@ def plot_interpolation(distribution: str, vae: VAE, test_x: Tensor, test_labels:
         if test_labels[indices[0]] == test_labels[indices[1]]:
             continue
 
-        x1 = test_x[indices[0]].reshape(1, 1, digit_size, digit_size)
-        x2 = test_x[indices[1]].reshape(1, 1, digit_size, digit_size)
+        x1 = test_x[indices[0]].reshape(1, 1, img_size, img_size)
+        x2 = test_x[indices[1]].reshape(1, 1, img_size, img_size)
 
         for j, lambda_ in enumerate(lin_space):
 
-            if distribution == 'bernoulli':
-                z1 = vae.encode(x1)
-                z2 = vae.encode(x2)
-            else:
-                z1, _ = vae.encode(x1)
-                z2, _ = vae.encode(x2)
+            z1, _, _ = vae.encode(x1)
+            z2, _, _ = vae.encode(x2)
 
             # Interpolate between the two latent vectors
             z = lambda_ * z1 + (1 - lambda_) * z2
 
-            if distribution == 'bernoulli':
-                z = gumbel_softmax(z)
-
-            # Decode the interpolated latent vector
-            if distribution == 'beta':
-                alpha, beta = vae.decode(z)
-                x = log_beta_pdf(x1.reshape(1, digit_size * digit_size), alpha, beta)
-                x = x.reshape(1, 1, digit_size, digit_size)
-            else:
-                x = vae.decode(z).reshape(digit_size, digit_size)
-
-            if distribution == 'bernoulli':
-                x = torch.bernoulli(x)
+            x_hat = vae.decoder.reconstruct(z)
+            x_hat = x_hat.reshape(img_size, img_size).detach().cpu().numpy()
 
             # Plot the interpolated digit
-            figure[row * digit_size: (row + 1) * digit_size,
-            j * digit_size: (j + 1) * digit_size] = x.detach().cpu().numpy()
+            figure[row * img_size: (row + 1) * img_size, j * img_size: (j + 1) * img_size] = x_hat
         row += 1
 
     plt.figure(figsize=(10, 10))
-    start_range = digit_size // 2
-    end_range = k * digit_size - start_range + 1
-    pixel_range = np.arange(start_range, end_range, digit_size)
+    start_range = img_size // 2
+    end_range = k * img_size - start_range + 1
+    pixel_range = np.arange(start_range, end_range, img_size)
     sample_range_x = np.round(lin_space, 2)
     plt.xticks(pixel_range, sample_range_x)
     plt.yticks([])
@@ -131,10 +109,9 @@ def plot_interpolation(distribution: str, vae: VAE, test_x: Tensor, test_labels:
     plt.show()
 
 
-def save_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: int, file_path: str, img_size: int):
+def save_reconstruction(vae: VAE, x_input: Tensor, n_samples: int, file_path: str, img_size: int):
     """
     Plot the reconstruction of the input samples
-    :param dist_type: type of the latent distribution
     :param vae: VAE model
     :param x_input: input images
     :param n_samples: number of new images to generate
@@ -144,26 +121,8 @@ def save_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: in
     # Reshape the input
     x_reshaped = x_input.reshape(n_samples, img_size, img_size).unsqueeze(1)
 
-    if dist_type == 'gaussian':
-        x_decoded = vae.forward(x_reshaped)
-    elif dist_type == 'bernoulli':
-        x_decoded = vae.forward(x_reshaped)
-        x_decoded = torch.bernoulli(x_decoded)
-        x_input = torch.bernoulli(x_input)
-    elif dist_type == 'beta':
-        alpha, beta = vae.forward(x_reshaped)
-        x_decoded = log_beta_pdf(x_input, alpha, beta)
-        x_decoded = torch.sigmoid(x_decoded)
-    elif dist_type == 'categorical':
-        pixels_per_bin = 5
-        # x_reshaped = torch.floor(x_reshaped / pixels_per_bin)
-        x_decoded = vae.forward(x_reshaped)
-        x_one_hot = torch.nn.functional.one_hot(x_reshaped.flatten(1).to(torch.int64), num_classes=vae.decoder.n_bins)
-        x_decoded = torch.sum(x_one_hot * torch.log(x_decoded), dim=1)
-        # x_decoded = gumbel_softmax(x_decoded)
-        # x_input = gumbel_softmax(x_input)
-    else:
-        raise ValueError(f"Unknown distribution type: {dist_type}")
+    x_hat = vae.reconstruct(x_reshaped)
+    x_hat = x_hat.reshape(n_samples, img_size, img_size).detach().cpu().numpy()
 
     # Generate new images by sampling from the latent space
     samples, _ = vae.sample(n_samples)
@@ -171,45 +130,27 @@ def save_reconstruction(dist_type: str, vae: VAE, x_input: Tensor, n_samples: in
     # Save images
     n_rows = 3
     plot_img = np.stack((x_input.detach().cpu().numpy(),
-                         x_decoded.detach().cpu().numpy(),
+                         x_hat.detach().cpu().numpy(),
                          samples.detach().cpu().numpy()))
     plot_img = np.reshape(plot_img, (n_samples * n_rows, img_size, img_size))
     datasets.save_image_stack(plot_img, n_rows, n_samples, file_path, margin=3)
 
 
-def plot_reconstruction(vae: VAE, dist_type: str, n_samples: int, img_size: int, samples=None, reconstruct=False):
-    # Reconstruct the input images
+def plot_reconstruction(vae: VAE, n_samples: int, img_size: int, samples=None, reconstruct=False):
     if reconstruct:
         samples = samples.reshape(n_samples, img_size, img_size)
-        images = samples.unsqueeze(1)
+        x = samples.unsqueeze(1)
 
-        if dist_type == 'gaussian':
-            x_hat = vae.forward(images)
-        elif dist_type == 'beta':
-            alpha, beta = vae.forward(images)
-            variance = (alpha * beta) / ((alpha + beta).pow(2) * (alpha + beta + 1))
-            x_hat = alpha / (alpha + beta) + variance * torch.randn_like(variance)
-        elif dist_type == 'categorical':
-            pmf = vae.forward(images)
-            dist = Categorical(pmf)
-            x_hat = dist.sample() / vae.decoder.n_bins
-        elif dist_type == 'bernoulli':
-            pmf = vae.forward(images)
-            x_hat = torch.bernoulli(pmf)
-            samples = torch.bernoulli(samples)
-        else:
-            raise ValueError(f"Unknown distribution type: {dist_type}")
-
+        x_hat = vae.reconstruct(x)
         x_hat = x_hat.reshape(n_samples, img_size, img_size).detach().cpu().numpy()
 
-        images = images.squeeze().detach().cpu().numpy()
-        plot_images = list(chain.from_iterable(zip(images, x_hat)))
+        x = x.squeeze().detach().cpu().numpy()
+        plot_images = list(chain.from_iterable(zip(x, x_hat)))
     else:
         samples = vae.sample(n_samples)
         samples = samples.reshape(n_samples, img_size, img_size)
         plot_images = samples.detach().cpu().numpy()
 
-    # Plot images
     height = samples.shape[1]
     width = samples.shape[2]
 

@@ -1,28 +1,33 @@
 import numpy as np
 import torch
 from torch.distributions import Categorical
-from torch.nn import Module
 from torch.nn.functional import one_hot
 
 from assignment3.model import GaussianEncoder, GaussianDecoder, BernoulliDecoder, BetaDecoder, \
-    CategoricalDecoder
+    CategoricalDecoder, BaseDecoder, BaseEncoder
 from assignment3.utils import log_beta_pdf, kl_loss
 
 
 class VAE:
-    def __init__(self, encoder: Module, decoder: Module):
+    def __init__(self, encoder: BaseEncoder, decoder: BaseDecoder):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.encoder = encoder.to(self.device)
         self.decoder = decoder.to(self.device)
 
-    def forward(self, x):
-        raise NotImplementedError
-
     def elbo(self, x):
         raise NotImplementedError
 
-    def sample(self, n_samples: int):
+    def reconstruct(self, x):
         raise NotImplementedError
+
+    def forward(self, x):
+        z, _, _ = self.encode(x)
+        return self.decode(z)
+
+    def sample(self, n_samples: int):
+        with torch.no_grad():
+            z = torch.randn(n_samples, self.encoder.n_latent, device=self.device)
+            return self.decoder.reconstruct(z)
 
     def encode(self, x):
         return self.encoder(x)
@@ -36,10 +41,6 @@ class GaussianVAE(VAE):
         super().__init__(GaussianEncoder(n_latent), GaussianDecoder(n_pixels, n_latent))
         self.n_latent = n_latent
 
-    def forward(self, x):
-        z, mu_z, var_z = self.encode(x)
-        return self.decode(z)
-
     def elbo(self, x):
         z, mu_z, var_z = self.encode(x)
         x_decoded = self.decode(z)
@@ -50,11 +51,8 @@ class GaussianVAE(VAE):
 
         return recon_loss + kl_loss(mu_z, var_z)
 
-    def sample(self, n_samples: int):
-        with torch.no_grad():
-            z = torch.randn(n_samples, self.n_latent, device=self.device)
-            x_hat = self.decode(z)
-            return x_hat
+    def reconstruct(self, x):
+        return self.forward(x)
 
 
 class CategoricalVAE(VAE):
@@ -62,10 +60,6 @@ class CategoricalVAE(VAE):
     def __init__(self, n_latent: int, n_pixels: int, n_bins: int):
         super().__init__(GaussianEncoder(n_latent), CategoricalDecoder(n_pixels, n_latent, n_bins))
         self.n_latent = n_latent
-
-    def forward(self, x):
-        z, mu_z, var_z = self.encode(x)
-        return self.decode(z)
 
     def elbo(self, x):
         x = torch.floor(x * (self.decoder.n_bins - 1))
@@ -79,10 +73,12 @@ class CategoricalVAE(VAE):
     def sample(self, n_samples: int):
         with torch.no_grad():
             z = torch.randn(n_samples, self.n_latent, device=self.device)
-            pmf = self.decode(z)
-            dist = Categorical(pmf)
-            x_hat = dist.sample() / self.decoder.n_bins
-            return x_hat
+            return self.decoder.reconstruct(z)
+
+    def reconstruct(self, x):
+        pmf = self.forward(x)
+        dist = Categorical(pmf)
+        return dist.sample() / self.decoder.n_bins
 
 
 class BernoulliVAE(VAE):
@@ -92,8 +88,7 @@ class BernoulliVAE(VAE):
 
     def forward(self, x):
         x_binary = torch.bernoulli(x)
-        z, mu_z, var_z = self.encode(x_binary)
-        return self.decode(z)
+        return super().forward(x_binary)
 
     def elbo(self, x):
         x_binary = torch.bernoulli(x)
@@ -103,21 +98,15 @@ class BernoulliVAE(VAE):
             torch.sum(x.flatten(1) * torch.log(pmf) + (1 - x.flatten(1)) * torch.log(1 - pmf), dim=1))
         return kl_loss(mu_z, var_z) - entropy_loss
 
-    def sample(self, n_samples: int):
-        with torch.no_grad():
-            z = torch.randn(n_samples, self.n_latent, device=self.device)
-            x_hat = torch.bernoulli(self.decode(z))
-            return x_hat
+    def reconstruct(self, x):
+        pmf = self.forward(x)
+        return torch.bernoulli(pmf)
 
 
 class BetaVAE(VAE):
     def __init__(self, n_latent: int, n_pixels: int):
         super().__init__(GaussianEncoder(n_latent), BetaDecoder(n_pixels, n_latent))
         self.n_latent = n_latent
-
-    def forward(self, x):
-        z, mu, var = self.encode(x)
-        return self.decode(z)
 
     def elbo(self, x):
         z, mu, var = self.encode(x)
@@ -126,10 +115,7 @@ class BetaVAE(VAE):
         log_likelihood = torch.sum(log_beta_pdf(x.flatten(1), alpha, beta))
         return kl_loss(mu, var) - log_likelihood
 
-    def sample(self, n_samples: int):
-        with torch.no_grad():
-            z = torch.randn(n_samples, self.n_latent, device=self.device)
-            alpha, beta = self.decode(z)
-            variance = (alpha * beta) / ((alpha + beta).pow(2) * (alpha + beta + 1))
-            x_hat = alpha / (alpha + beta) + variance * torch.randn_like(variance)
-            return x_hat
+    def reconstruct(self, x):
+        alpha, beta = self.forward(x)
+        variance = (alpha * beta) / ((alpha + beta).pow(2) * (alpha + beta + 1))
+        return alpha / (alpha + beta) + variance * torch.randn_like(variance)
