@@ -51,14 +51,15 @@ if __name__ == '__main__':
     test_x = datasets.normalize_min_max(test_x, 0., 1.)
 
     # Split off the validation set
-    valid_x = train_x[-10000:, :]
+    val_x = train_x[-10000:, :]
     train_x = train_x[:-10000, :]
-    valid_labels = train_labels[-10000:]
+    val_labels = train_labels[-10000:]
     train_labels = train_labels[:-10000]
 
     # Generate torch tensors from the data
     train_x = torch.tensor(train_x).to(device)
     test_x = torch.tensor(test_x).to(device)
+    val_x = torch.tensor(val_x).to(device)
     train_N, train_D = train_x.shape
 
     # Determine the number of pixels on one side of the image
@@ -94,8 +95,11 @@ if __name__ == '__main__':
     # Use early stopping to stop training when the validation loss stops improving
     stop_early = EarlyStopping(stop_threshold)
 
-    loss_history = []
-    for epoch in tqdm(range(num_epochs)):
+    train_loss_history = []
+    val_loss_history = []
+    pbar = tqdm(range(num_epochs))
+    for epoch in pbar:
+        vae.train()
         # make batches of training indices
         shuffled_idx = torch.randperm(train_x.shape[0])
         idx_batches = shuffled_idx.split(batch_size)
@@ -109,10 +113,8 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             sum_loss += loss
-        mean_loss = sum_loss / train_x.shape[0]
-        mean_loss = mean_loss.cpu().detach().numpy()
-        print(f'Epoch {epoch}. Loss = {mean_loss}')
-        loss_history.append(mean_loss)
+        train_loss = sum_loss / train_x.shape[0]
+        train_loss_history.append(train_loss.item())
 
         if epoch % plot_interval == 0:
             with torch.no_grad():
@@ -120,40 +122,35 @@ if __name__ == '__main__':
                 torch.save(vae.encoder.state_dict(), os.path.join(model_path, f'encoder_{epoch}.pt'))
                 torch.save(vae.decoder.state_dict(), os.path.join(model_path, f'decoder_{epoch}.pt'))
 
-        if stop_early(mean_loss):
-            print('Training criterion reached. Stopping training...')
+        with torch.no_grad():
+            val_loss = 0
+            vae.eval()
+            shuffled_idx = torch.randperm(val_x.shape[0])
+            idx_batches = shuffled_idx.split(batch_size)
+            for batch_count, idx in enumerate(idx_batches):
+                batch_x = train_x[idx, :]
+                input_x = batch_x.reshape(batch_size, img_size, img_size).unsqueeze(1)
+
+                loss = vae.elbo(input_x)
+                val_loss += loss.item()
+
+            val_loss_history.append(val_loss / val_x.shape[0])
+
+        pbar.set_postfix({'Train Loss': train_loss, 'Val Loss': val_loss})
+
+        if stop_early(train_loss):
+            print(f'Training criterion reached at epoch {epoch}. Stopping training...')
             # Store the model weights
             torch.save(vae.encoder.state_dict(), os.path.join(model_path, 'encoder.pt'))
             torch.save(vae.decoder.state_dict(), os.path.join(model_path, 'decoder.pt'))
             break
 
         # Plot and save the ELBO curve and data reconstruction
+        plot_loss(train_loss_history, val_loss_history, img_path)
         test_input = test_x.reshape(test_x.shape[0], img_size, img_size).unsqueeze(1)
         test_samples = test_x[0:n_samples, :]
-        plot_loss(loss_history, img_path)
         plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000])
         plot_latent_space(vae.encoder, test_input[:1000], test_labels[:1000], use_pca=True)
         plot_interpolation(vae, test_input, test_labels, img_size)
         plot_reconstruction(vae, n_samples, img_size, test_samples, reconstruct=True)
         plot_reconstruction(vae, n_samples, img_size, test_samples, reconstruct=False)
-
-
-class EarlyStopper:
-    def __init__(self, patience=1, min_delta=0.5):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-
-    def __call__(self, validation_loss, previous_validation_loss):
-        if validation_loss >= previous_validation_loss:
-            self.counter += 1
-        elif np.abs(previous_validation_loss - validation_loss) < self.min_delta:
-            self.counter += 1
-        elif previous_validation_loss - validation_loss >= self.min_delta:
-            self.counter = 0
-            previous_validation_loss = validation_loss
-
-        if self.counter > self.patience:
-            return True
-        else:
-            return False
