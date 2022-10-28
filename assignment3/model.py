@@ -2,7 +2,7 @@ from math import sqrt
 
 import torch
 from torch import relu
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 from torch.nn import Conv2d, Linear, BatchNorm2d, ConvTranspose2d, ELU, Softplus, Module, Sigmoid, Softmax, ModuleList
 
 
@@ -103,7 +103,9 @@ class GaussianDecoder(BaseDecoder):
         return self.mu(deconvoluted)
 
     def reconstruct(self, z):
-        return self.forward(z)
+        mu = self.forward(z)
+        x_hat = Normal(mu, self.var).sample()
+        return x_hat
 
 
 class CategoricalDecoder(BaseDecoder):
