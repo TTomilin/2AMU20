@@ -1,30 +1,31 @@
 from itertools import chain
 from os import path
+from typing import List
 
 import matplotlib as mpl
 import numpy as np
-import torch
 from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
 from torch import Tensor
-from torch.distributions import Categorical
 from torch.nn import Module
-from torch.nn.functional import gumbel_softmax
 
 from assignment3 import datasets
-from assignment3.utils import log_beta_pdf
 from assignment3.vae import VAE
 
 
-def plot_loss(loss_history: list, save_path: str = None):
+def plot_loss(train_loss_history: List, val_loss_history: List, save_path: str = None):
     """
     Plot the loss history
-    :param loss_history: list of loss values
+    :param train_loss_history: list of training loss values
+    :param val_loss_history: list of validation loss values
     :param save_path: path to save the plot to
     """
-    plt.figure(figsize=(12, 10))
-    plt.clf()
-    plt.plot(loss_history)
+    plt.style.use('seaborn')
+    plt.plot(train_loss_history)
+    plt.plot(val_loss_history)
+    plt.legend(["Training loss", "Validation loss"])
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
     plt.show()
     plt.savefig(path.join(save_path, 'elbo.png'))
 
@@ -40,6 +41,7 @@ def plot_latent_space(encoder: Module, test_x: Tensor, test_labels: Tensor, use_
     """
     z, _, _ = encoder(test_x)
     values = z.detach().cpu().numpy()
+    plt.style.use('default')
     plt.figure(figsize=(12, 10))
 
     if use_pca:
@@ -97,6 +99,7 @@ def plot_interpolation(vae: VAE, test_x: Tensor, test_labels: Tensor, img_size: 
             figure[row * img_size: (row + 1) * img_size, j * img_size: (j + 1) * img_size] = x_hat
         row += 1
 
+    plt.style.use('default')
     plt.figure(figsize=(10, 10))
     start_range = img_size // 2
     end_range = k * img_size - start_range + 1
@@ -173,5 +176,6 @@ def plot_reconstruction(vae: VAE, n_samples: int, img_size: int, samples=None, r
     framed_img = frame_gray_val * np.ones((img.shape[0] + 2 * frame, img.shape[1] + 2 * frame))
     framed_img[frame:(frame + img.shape[0]), frame:(frame + img.shape[1])] = img
 
+    plt.style.use('default')
     plt.imshow(framed_img)
     plt.show()
