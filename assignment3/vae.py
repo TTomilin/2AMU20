@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch.distributions import Categorical
+from torch.nn import Module
 from torch.nn.functional import one_hot
 
 from assignment3.model import GaussianEncoder, GaussianDecoder, BernoulliDecoder, BetaDecoder, \
@@ -8,8 +9,9 @@ from assignment3.model import GaussianEncoder, GaussianDecoder, BernoulliDecoder
 from assignment3.utils import log_beta_pdf, kl_loss
 
 
-class VAE:
+class VAE(Module):
     def __init__(self, encoder: BaseEncoder, decoder: BaseDecoder):
+        super(VAE, self).__init__()
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.encoder = encoder.to(self.device)
         self.decoder = decoder.to(self.device)
